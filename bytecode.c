@@ -40,6 +40,8 @@
 
 typedef enum { CODE_SEGMENT, DATA_SEGMENT } Segment_Type;
 
+typedef enum { DATA_STRING, DATA_NUMBER } Data_Type;
+
 // Generic quadword segment for storing the code
 struct qword_segment {
     qword *data;
@@ -111,22 +113,35 @@ int bc_push_instr(Byte_Code *bc, qword instr)
     return 0;
 }
 
-static int bc_push_data(Byte_Code *bc, const char *data, size_t data_len)
+static int bc_push_data(Byte_Code *bc, const char *data, size_t data_len,
+                        Data_Type dtype)
 {
-    // Skip "
-    if (*data == '"')
-        data++;
+    if (dtype == DATA_STRING) {
+        // Skip delimiter
+        if (*data == '"')
+            data++;
 
-    for (int i = 0; i < data_len; ++i) {
-        if (bc->data_segment->length + 1 == bc->data_segment->capacity)
-            bc->data_segment = segment_extend(CODE_SEGMENT, bc->data_segment);
+        while (bc->data_segment->length + data_len + 1 >=
+               bc->data_segment->capacity)
+            bc->data_segment = segment_extend(DATA_SEGMENT, bc->data_segment);
 
-        bc->data_segment->data[bc->data_segment->length++] = data[i];
+        // TODO use memcpy or strncpy for nul inclusion
+        for (size_t i = 0; i < data_len; ++i) {
+            bc->data_segment->data[bc->data_segment->length++] = data[i];
+        }
+
+        bc->data_segment->data[bc->data_segment->length++] = '\0';
+    } else {
+        size_t bytes = (size_t)atoll(data);
+        // Reserve bytes space in the data segment
+        while (bc->data_segment->length + bytes >= bc->data_segment->capacity)
+            bc->data_segment = segment_extend(DATA_SEGMENT, bc->data_segment);
+        bc->data_segment->length += bytes;
+
+        return bytes;
     }
 
-    bc->data_segment->data[bc->data_segment->length++] = '\0';
-
-    return 0;
+    return data_len;
 }
 
 // TODO: Dispatch the correct encoding based on opcode
@@ -219,6 +234,14 @@ static inline void read_token(char **str, char *dest)
 
     if (!str || !dest)
         return;
+
+    if (**str == '"') {
+        do {
+            if (**str == '\\' && **(str + 1) == '"')
+                *dest++ = *(*str)++;
+            *dest++ = *(*str)++;
+        } while (**str && **str != '"');
+    }
 
     while (!isspace(**str) && **str && **str != ',')
         *dest++ = *(*str)++;
@@ -658,7 +681,7 @@ static Labels scan_labels(FILE *fp)
 
 enum { TOKEN_OP, TOKEN_DST, TOKEN_SRC, NUM_TOKENS };
 
-static void read_data(Byte_Code *bc, Labels *labels, char **line)
+static void read_data(Byte_Code *bc, Labels *labels, char **line, FILE *fp)
 {
     if (!*line)
         return;
@@ -666,37 +689,54 @@ static void read_data(Byte_Code *bc, Labels *labels, char **line)
     char tokens[32][NAME_MAX_LEN] = {0};
     memset(tokens, 0x00, NUM_TOKENS * sizeof(tokens[0]));
     size_t i = 0, data_len = 0;
-    // Parsing a well-formed data segment line:
-    // e.g. message: db "Hello", 5
-    while (**line != '\0' && **line != ';') {
-        read_token(line, tokens[i++]);
-        strip_spaces(line);
-    }
 
-    for (size_t j = 0; j < i; j += 4) {
-        // label expected first
-        if (!is_label(tokens[j]))
-            goto parse_error;
+    // Parse till another section starts or the line is empty
+    do {
+        // skip empty lines
+        if (**line == '\n')
+            continue;
 
-        // Only support define bytes directive for now
-        if (strncmp(tokens[j + 1], "db", 2) != 0)
-            goto parse_error;
+        // Parsing a well-formed data segment line:
+        // e.g. message: db "Hello", 5
+        while (**line != '\0' && **line != ';') {
+            read_token(line, tokens[i++]);
+            strip_spaces(line);
+        }
 
-        if (!is_number(tokens[j + 3]))
-            goto parse_error;
+        for (size_t j = 0; j < i; j += 4) {
+            // label expected first
+            if (!is_label(tokens[j]))
+                goto parse_error;
 
-        // Length of the defined data
-        data_len = atoi(tokens[j + 3]);
+            // Only support define bytes directive for now
+            if (strncmp(tokens[j + 1], "db", 2) != 0)
+                goto parse_error;
 
-        // Copy the label name so it can be referenced later when building the
-        // instruction set
-        strncpy(labels->names[labels->length].name, tokens[j], data_len);
+            if (!is_number(tokens[j + 3]))
+                goto parse_error;
 
-        // String content, store pointer address
-        labels->names[labels->length++].offset = bc->data_addr;
-        bc->data_addr += data_len;
-        bc_push_data(bc, tokens[j + 2], data_len);
-    }
+            // Length of the defined data
+            data_len = atoi(tokens[j + 3]);
+
+            // Copy the label name so it can be referenced later when building
+            // the instruction set
+            strncpy(labels->names[labels->length].name, tokens[j], data_len);
+
+            // Reserving bytes space
+            if (is_number(tokens[j + 2])) {
+                labels->names[labels->length++].offset = bc->data_addr;
+                char number[0xF];
+                snprintf(number, sizeof(number), "%s", tokens[j + 2]);
+                bc->data_addr +=
+                    bc_push_data(bc, number, data_len, DATA_NUMBER);
+            } else {
+                // String content, store pointer address
+                labels->names[labels->length++].offset = bc->data_addr;
+                bc->data_addr += data_len;
+                bc_push_data(bc, tokens[j + 2], data_len, DATA_STRING);
+            }
+        }
+    } while (fgets(*line, 0xFFF, fp) && **line != '\0' && **line != '.');
 
     return;
 
@@ -742,7 +782,7 @@ Byte_Code *bc_load(const char *path)
                         *line_ptr = '\0';
                     } else {
                         line_ptr = line;
-                        read_data(bc, &labels, &line_ptr);
+                        read_data(bc, &labels, &line_ptr, fp);
                         strip_spaces(&line_ptr);
                     }
                 }

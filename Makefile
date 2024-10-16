@@ -9,6 +9,9 @@ test: tests.c
 
 all: test cpu
 
+run: cpu
+	./T800-64
+
 clean:
 	@rm -rf *.o
 	@rm -rf T800-64

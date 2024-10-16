@@ -87,11 +87,11 @@ static Exec_Result execute(Cpu *cpu, struct instruction *instr)
         break;
     }
     case POP: {
-        cpu->r[instr->dst] = *cpu->sp--;
+        cpu->r[instr->dst] = *--cpu->sp;
         break;
     }
     case POM: {
-        cpu->memory[instr->src] = *cpu->sp--;
+        cpu->memory[instr->src] = *--cpu->sp;
         break;
     }
     case ADD: {
@@ -228,8 +228,18 @@ static Exec_Result execute(Cpu *cpu, struct instruction *instr)
         break;
     }
     case SYSCALL: {
-        syscall_write(cpu->r[BX], &cpu->memory[cpu->r[CX]],
-                      cpu->r[DX] * sizeof(qword));
+        switch (cpu->r[BX]) {
+        // STDIN
+        case 0:
+            syscall_read(cpu->r[BX], &cpu->memory[cpu->r[CX]],
+                         cpu->r[DX] * sizeof(qword));
+            break;
+        // STDOUT
+        case 1:
+            syscall_write(cpu->r[BX], &cpu->memory[cpu->r[CX]],
+                          cpu->r[DX] * sizeof(qword));
+            break;
+        }
         break;
     }
     case HLT:

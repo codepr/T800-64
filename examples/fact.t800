@@ -2,22 +2,31 @@
 ; Factorial(10)
 
 .data
-msg: db "Result:", 7
+msg: db "Insert input: ", 14
+buf: db 1024, 10        ; reserve 1024 bytes for input
 
 .main
     ; Initialize variables
-    LDI AX, 10   ; Initialize starting value 10
-    LDI BX, 9    ; Initialize second value to AX - 1
+    ldi ax, 10          ; Initialize starting value 10
+    ldi bx, 9           ; Initialize second value to AX - 1
 
     ; Factorial loop
     loop:
-        MUL AX, BX  ; AX = AX * AX - 1
-        DEC BX      ; BX = BX - 1 decrement the counter
-        CMI BX, 0   ; Check if 0 is reached
-        JNE loop    ; Jump back to loop if BX is greater than 0
-        ;LDI AX, 1
-        ;LDI BX, 1
-        ;LDR CX, msg
-        ;LDI DX, 7
-        SYSCALL
-        HLT         ; Halt execution
+        mul ax, bx       ; ax = ax * ax - 1
+        dec bx           ; bx = bx - 1 decrement the counter
+        cmi bx, 0        ; Check if 0 is reached
+        jne loop         ; Jump back to loop if bx is greater than 0
+        ldi bx, 1
+        ldr cx, msg
+        ldi dx, 14
+        syscall
+        ldi bx, 0
+        ldr cx, buf
+        ldi dx, 1024
+        syscall
+        ldi bx, 1
+        ldr cx, buf
+        ldi dx, 3
+        syscall
+
+        hlt              ; Halt execution
